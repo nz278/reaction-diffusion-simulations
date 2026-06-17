@@ -10,6 +10,7 @@ base:
   stopping_threshold: 0.0001
   min_steps: 1000
   nucleation_rate: 0.0
+  noise_amplitude: 0.0
 
   init_mode: random_uniform_over0
   activator_type: juxtacrine

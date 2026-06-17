@@ -164,7 +164,7 @@ def main() -> None:
     ap.add_argument(
         "--config",
         "-c",
-        default="config_2D.yaml",
+        default="config.yaml",
         help="Path to YAML config",
     )
     args = ap.parse_args()
