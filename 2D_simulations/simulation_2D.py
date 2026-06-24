@@ -14,7 +14,7 @@ from typing import Mapping
 
 import numpy as np
 
-from finding_steady_states import fast_stable_steady_state
+from finding_steady_states import fast_stable_steady_state, find_unstable_fixed_point
 
 
 def initialize_fields_2d(
@@ -27,6 +27,7 @@ def initialize_fields_2d(
     n_points: int = 10,
     spike_indices: np.ndarray | None = None,
     set_peak_height: float = 25.0,
+    init_amplitude: float = 0.01,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Initialize activator and inhibitor fields on a 2D hex grid.
@@ -96,7 +97,7 @@ def initialize_fields_2d(
         pass
 
     elif init_mode == "near_zero":
-        activator = np.abs(np.random.randn(Ny, Nx)) * 0.01
+        activator = np.abs(np.random.randn(Ny, Nx)) * init_amplitude
         inhibitor = np.zeros((Ny, Nx), dtype=float)
 
     else:
@@ -212,6 +213,7 @@ def run_coupled_hex(
     nucleation_rate: float = 0.0,
     noise_amplitude: float = 0.0,
     set_peak_height: float = 25.0,
+    init_amplitude: float | None = None,
 ) -> tuple[list[np.ndarray], list[np.ndarray], int, float, float]:
     """
     Run the single-pair 2D hex-grid simulation.
@@ -230,6 +232,10 @@ def run_coupled_hex(
     except Exception:
         a_ss = i_ss = 0.0
 
+    raw_a_ss, raw_i_ss = a_ss, i_ss  # before the spike_value fallback below — needed
+                                       # so the amplitude threshold is computed against
+                                       # the real fixed point, not a stand-in value
+
     if not (a_ss > 0.0 and i_ss > 0.0 and np.isfinite(a_ss) and np.isfinite(i_ss)):
         a_ss = i_ss = float(spike_value)
 
@@ -243,6 +249,18 @@ def run_coupled_hex(
             raise ValueError(f"n_points={n_points} is larger than the grid size Ny*Nx={max_points}.")
         spike_indices = init_rng.choice(max_points, size=n_points, replace=False)
 
+    if init_amplitude is None:
+        if raw_a_ss > 0.0 and raw_i_ss > 0.0 and np.isfinite(raw_a_ss) and np.isfinite(raw_i_ss):
+            try:
+                threshold = find_unstable_fixed_point(p, raw_a_ss, raw_i_ss, activator_type=activator_type)
+            except Exception:
+                threshold = None
+        else:
+            threshold = None  # no real fixed point to measure a distance from
+        resolved_init_amplitude = threshold * 0.1 if threshold is not None else 0.01
+    else:
+        resolved_init_amplitude = init_amplitude
+
     activator, inhibitor = initialize_fields_2d(
         Ny,
         Nx,
@@ -253,6 +271,7 @@ def run_coupled_hex(
         n_points=n_points,
         spike_indices=spike_indices,
         set_peak_height=set_peak_height,
+        init_amplitude=resolved_init_amplitude,
     )
 
     nbr_r, nbr_c, nbr_mask, nbr_count = _build_hex_neighbor_arrays(Ny, Nx)
