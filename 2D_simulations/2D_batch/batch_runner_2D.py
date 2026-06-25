@@ -27,6 +27,7 @@ import pandas as pd
 import yaml
 from joblib import Parallel, delayed
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 # Allow importing simulation.py from the parent directory.
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,7 +36,7 @@ sys.path.insert(0, str(ROOT))
 from grid import make_param_grid
 from io_utils import write_constants_txt
 from simulation_2D import run_coupled_hex as run_coupled_hex_sim
-from visualize_2D import plot_one_frame
+from visualize_2D import animate_histories, plot_one_frame
 
 
 # Set a fixed seed for reproducible random sampling.
@@ -98,6 +99,8 @@ def run_one_simulation(params: dict[str, Any]) -> dict[str, Any]:
         "status": "done",
         "steps_used": steps_used,
         "parameters": params,
+        "A_hist": A_hist,
+        "R_hist": R_hist,
         "activator_initial": A_hist[0],
         "activator_final": A_hist[-1],
         "inhibitor_initial": R_hist[0],
@@ -105,6 +108,28 @@ def run_one_simulation(params: dict[str, Any]) -> dict[str, Any]:
         "activator_steady-state": a_ss,
         "inhibitor_steady-state": i_ss,
     }
+
+
+# Plot max and mean per-cell change for analyzing termination conditions
+def plot_pc_change(
+    max_change: np.ndarray,
+    mean_change: np.ndarray,
+    save_every: int,
+    filepath: str,
+) -> None:
+    time_steps = np.arange(1, len(max_change) + 1) * save_every
+
+    plt.figure(figsize=(6, 4))
+    plt.plot(time_steps, max_change, label="Max per-cell change")
+    plt.plot(time_steps, mean_change, label="Mean per-cell change")
+    plt.yscale("log")
+    plt.xlabel("Simulation step")
+    plt.ylabel("|ΔA| per saved frame")  # Change in activator field
+    plt.title("Termination metric over time")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(filepath, dpi=200)
+    plt.close()
 
 
 def run_one(
@@ -136,6 +161,21 @@ def run_one(
         R_initial=r.get("inhibitor_initial"),
     )
 
+    # Additional video logic similar to main_2D
+    if p.get("video_enable", False):
+        video_dir = os.path.join(outdir, "videos")
+        os.makedirs(video_dir, exist_ok=True)
+
+        animate_histories(
+            r["A_hist"],
+            r["R_hist"],
+            p.get("save_every", 100),
+            title=f"Run {run_id:04d}",
+            loop=False,
+            savefile=os.path.join(video_dir, f"run_{run_id:04d}.mp4"),
+            fps=60,  # shorter playback, no frame loss
+        )
+
     a_max = A_final.max()
     a_min = A_final.min()
     a_diff = a_max - a_min
@@ -143,21 +183,52 @@ def run_one(
     r_min = R_final.min()
     r_diff = r_max - r_min
 
-    row.update(
-        {
-            "a_max": a_max,
-            "a_min": a_min,
-            "a_diff": a_diff,
-            "r_max": r_max,
-            "r_min": r_min,
-            "r_diff": r_diff,
-        }
-    )
+    # Termination conditions
+    if p.get("term_plots_enable", False):
+        term_dir = os.path.join(outdir, "termination_plots")
+        os.makedirs(term_dir, exist_ok=True)
+
+        A_hist = np.asarray(r["A_hist"])
+        dA = np.abs(np.diff(A_hist, axis=0))
+
+        max_change = dA.reshape(dA.shape[0], -1).max(axis=1)
+        mean_change = dA.reshape(dA.shape[0], -1).mean(axis=1)
+
+        plot_pc_change(
+            max_change,
+            mean_change,
+            p.get("save_every", 100),
+            os.path.join(term_dir, f"plot_{run_id:04d}.png"),
+        )
+
+        row.update(
+            {
+                "a_max": a_max,
+                "a_min": a_min,
+                "a_diff": a_diff,
+                "r_max": r_max,
+                "r_min": r_min,
+                "r_diff": r_diff,
+                "max_change_final": max_change[-1],
+                "mean_change_final": mean_change[-1],
+                "max_change_peak": max_change.max(),
+                "mean_change_peak": mean_change.max(),
+            }
+        )
 
     np.savez(
         os.path.join(outdir, f"field_{run_id:04d}.npz"),
+        A_initial=np.asarray(r["activator_initial"]),
+        R_initial=np.asarray(r["inhibitor_initial"]),
         A_final=np.asarray(A_final),
         R_final=np.asarray(R_final),
+        A_hist=A_hist,
+        R_hist=np.asarray(r["R_hist"]),
+        max_change=max_change,
+        mean_change=mean_change,
+        save_every=p.get("save_every", 100),
+        steps_used=r["steps_used"],
+
     )
 
     return row
