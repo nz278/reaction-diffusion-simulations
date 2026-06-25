@@ -183,38 +183,38 @@ def run_one(
     r_min = R_final.min()
     r_diff = r_max - r_min
 
-    A_hist = np.asarray(r["A_hist"])
-    dA = np.abs(np.diff(A_hist, axis=0))
-
     # Termination conditions
+    if p.get("term_plots_enable", False):
+        term_dir = os.path.join(outdir, "termination_plots")
+        os.makedirs(term_dir, exist_ok=True)
 
-    max_change = dA.reshape(dA.shape[0], -1).max(axis=1)
-    mean_change = dA.reshape(dA.shape[0], -1).mean(axis=1)
+        A_hist = np.asarray(r["A_hist"])
+        dA = np.abs(np.diff(A_hist, axis=0))
 
-    term_dir = os.path.join(outdir, "termination_plots")
-    os.makedirs(term_dir, exist_ok=True)
+        max_change = dA.reshape(dA.shape[0], -1).max(axis=1)
+        mean_change = dA.reshape(dA.shape[0], -1).mean(axis=1)
 
-    plot_pc_change(
-        max_change,
-        mean_change,
-        p.get("save_every", 100),
-        os.path.join(term_dir, f"plot_{run_id:04d}.png"),
-    )
+        plot_pc_change(
+            max_change,
+            mean_change,
+            p.get("save_every", 100),
+            os.path.join(term_dir, f"plot_{run_id:04d}.png"),
+        )
 
-    row.update(
-        {
-            "a_max": a_max,
-            "a_min": a_min,
-            "a_diff": a_diff,
-            "r_max": r_max,
-            "r_min": r_min,
-            "r_diff": r_diff,
-            "max_change_final": max_change[-1],
-            "mean_change_final": mean_change[-1],
-            "max_change_peak": max_change.max(),
-            "mean_change_peak": mean_change.max(),
-        }
-    )
+        row.update(
+            {
+                "a_max": a_max,
+                "a_min": a_min,
+                "a_diff": a_diff,
+                "r_max": r_max,
+                "r_min": r_min,
+                "r_diff": r_diff,
+                "max_change_final": max_change[-1],
+                "mean_change_final": mean_change[-1],
+                "max_change_peak": max_change.max(),
+                "mean_change_peak": mean_change.max(),
+            }
+        )
 
     np.savez(
         os.path.join(outdir, f"field_{run_id:04d}.npz"),

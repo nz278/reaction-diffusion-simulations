@@ -30,9 +30,10 @@ base:
   inh_diffusion: 10.0
   act_diffusion: 1.0
 
-  # Additional video toggle for batch_runner
+  # Additional video and termination plots toggle for batch_runner
   # Turn off to save time if doing large batches
   video_enable: true
+  term_plots_enable: true
 
 mode: grid
 sweeps:
