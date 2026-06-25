@@ -9,7 +9,7 @@ from radial_autocor_npz import analyze_image_autocorrelation
 from npz_feature_distribution import otsu_threshold, component_mask, approx_diameter_hexagons
 
 script_path = Path(__file__).resolve()
-run_dir = script_path.parents[1] / "2D_batch" / "runs" / "template-single-circuit"  # Avoid renaming this
+run_dir = script_path.parents[1] / "2D_batch" / "runs" / "collect_metrics"
 
 # def temporal_metrics(npz, field="[history]")
 
