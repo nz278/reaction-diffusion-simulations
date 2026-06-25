@@ -6,10 +6,16 @@ import matplotlib.pyplot as plt
 # Import existing analysis functions from Ben's repo
 from fft_analysis_2D import load_field, radial_power_spectrum
 from radial_autocor_npz import analyze_image_autocorrelation
-from npz_feature_distribution import otsu_threshold, component_mask, approx_diameter_hexagons
+# Otsu-thresholded feature metrics (activated fraction/components) excluded for now —
+# every field gets measured against a different per-field threshold, which reads a
+# fully-on field as "50% activated" (the artifact Dr. Morsut flagged). Re-enable once
+# the group settles on a shared cutoff approach. Import kept commented, not deleted,
+# so re-enabling is a one-line change.
+# from npz_feature_distribution import otsu_threshold, component_mask, approx_diameter_hexagons
+from scipy.signal import find_peaks, peak_widths
 
 script_path = Path(__file__).resolve()
-run_dir = script_path.parents[1] / "2D_batch" / "runs" / "template-single-circuit"  # Avoid renaming this
+run_dir = script_path.parents[1] / "2D_batch" / "runs" / "collect_metrics"
 
 # def temporal_metrics(npz, field="[history]")
 
@@ -17,28 +23,38 @@ run_dir = script_path.parents[1] / "2D_batch" / "runs" / "template-single-circui
 # Just base summarize function for now
 def base_summarize(npz, field="A_final", threshold="auto", layout="even-r", min_size=2):
     data, field_name = load_field(npz, field)
-    threshold_val = otsu_threshold(data) if threshold == "auto" else float(threshold)
-    active_mask = np.isfinite(data) & (data > threshold_val)
 
-    components = [c for c in component_mask(active_mask, layout) if len(c) >= min_size]
-    component_sizes = np.array([len(c) for c in components], dtype=float)
-    diameters = np.array(
-        [approx_diameter_hexagons(int(s)) for s in component_sizes], dtype=float
-    )
+    # Otsu-thresholded feature metrics excluded for now — see import note above.
+    # threshold_val = otsu_threshold(data) if threshold == "auto" else float(threshold)
+    # active_mask = np.isfinite(data) & (data > threshold_val)
+    # components = [c for c in component_mask(active_mask, layout) if len(c) >= min_size]
+    # component_sizes = np.array([len(c) for c in components], dtype=float)
+    # diameters = np.array(
+    #     [approx_diameter_hexagons(int(s)) for s in component_sizes], dtype=float
+    # )
 
     # FFT power spectrum
     wavelengths, spectrum = radial_power_spectrum(data)
+    peak_wavelength = np.nan
+    peak_width = np.nan
+    peak_sharpness = np.nan
     if len(spectrum) > 0 and np.any(np.isfinite(spectrum)):
-        peak_wavelength = float(wavelengths[np.argmax(spectrum)])
         positive = spectrum[spectrum > 0]
         peak_sharpness = (
             float(np.nanmax(spectrum) / np.nanmedian(positive))
             if len(positive) > 0
             else np.nan
         )
-    else:
-        peak_wavelength = np.nan
-        peak_sharpness = np.nan
+        peak_idx_arr, props = find_peaks(spectrum, prominence=0.0)
+        if len(peak_idx_arr) > 0:
+            best = np.argmax(props["prominences"])
+            peak_idx = peak_idx_arr[best]
+            peak_wavelength = float(wavelengths[peak_idx])
+            widths_samples, _, _, _ = peak_widths(spectrum, [peak_idx], rel_height=0.5)
+            local_spacing = abs(wavelengths[peak_idx] - wavelengths[peak_idx - 1]) if peak_idx > 0 else abs(wavelengths[1] - wavelengths[0])
+            peak_width = float(widths_samples[0] * local_spacing)
+        else:
+            peak_wavelength = float(wavelengths[np.argmax(spectrum)])
 
     # Autocorrelation
     _, autocorr = analyze_image_autocorrelation(data)
@@ -59,33 +75,35 @@ def base_summarize(npz, field="A_final", threshold="auto", layout="even-r", min_
         else np.nan
     )
 
-    if len(component_sizes) > 0:
-        mean_component_size = float(component_sizes.mean())
-        max_component_size = int(component_sizes.max())
-        size_cv = (
-            float(component_sizes.std() / component_sizes.mean())
-            if component_sizes.mean() > 0
-            else np.nan
-        )
-        mean_diameter = float(diameters.mean())
-    else:
-        mean_component_size = 0.0
-        max_component_size = 0
-        size_cv = np.nan
-        mean_diameter = 0.0
+    # Otsu-dependent component sizing excluded for now — see note above.
+    # if len(component_sizes) > 0:
+    #     mean_component_size = float(component_sizes.mean())
+    #     max_component_size = int(component_sizes.max())
+    #     size_cv = (
+    #         float(component_sizes.std() / component_sizes.mean())
+    #         if component_sizes.mean() > 0
+    #         else np.nan
+    #     )
+    #     mean_diameter = float(diameters.mean())
+    # else:
+    #     mean_component_size = 0.0
+    #     max_component_size = 0
+    #     size_cv = np.nan
+    #     mean_diameter = 0.0
 
     return {
         "file": npz.name,
         "field": field_name,
-        "threshold": threshold_val,
-        "activated_hexes": int(active_mask.sum()),
-        "activated_fraction": float(active_mask.mean()),
-        "n_components": int(len(components)),
-        "mean_component_size": mean_component_size,
-        "max_component_size": max_component_size,
-        "component_size_cv": size_cv,
-        "mean_diameter_hexes": mean_diameter,
+        # "threshold": threshold_val,
+        # "activated_hexes": int(active_mask.sum()),
+        # "activated_fraction": float(active_mask.mean()),
+        # "n_components": int(len(components)),
+        # "mean_component_size": mean_component_size,
+        # "max_component_size": max_component_size,
+        # "component_size_cv": size_cv,
+        # "mean_diameter_hexes": mean_diameter,
         "peak_fft_wavelength": peak_wavelength,
+        "peak_fft_width": peak_width,
         "peak_fft_sharpness": peak_sharpness,
         "autocorr_zero_crossing": zero_crossing,
         "autocorr_length_1e": corr_length,
@@ -123,9 +141,9 @@ def merge_run(summary, run_dir):
 def plot_metrics(merged, run_dir, x_var="inh_prod_rate", col_var="inh_diffusion", hue_var="act_hill_coeff"):
     # Add more as needed to visrualize
     metrics = [
-        "activated_fraction",
-        "mean_diameter_hexes",
         "peak_fft_sharpness",
+        "peak_fft_width",
+        "autocorr_zero_crossing",
         "autocorr_length_1e",
     ]
 
