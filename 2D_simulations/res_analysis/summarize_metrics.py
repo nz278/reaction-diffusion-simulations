@@ -17,6 +17,15 @@ from scipy.signal import find_peaks, peak_widths
 script_path = Path(__file__).resolve()
 run_dir = script_path.parents[1] / "2D_batch" / "runs" / "collect_metrics"
 
+# A field with ~zero variance (uniform ON, or uniform OFF) has no real spatial
+# structure for the FFT/autocorrelation metrics to describe. Computing them
+# anyway picks up pure floating-point noise (~1e-13 and smaller) and reports
+# it as a real peak/decay length, which looks like data but isn't. The
+# weakest *real* pattern we've validated against has std ~0.41, so this
+# threshold sits with enormous margin on both sides of the noise floor and
+# the smallest real signal seen so far.
+UNIFORM_FIELD_STD_EPS = 1e-6
+
 # def temporal_metrics(npz, field="[history]")
 
 
@@ -33,47 +42,57 @@ def base_summarize(npz, field="A_final", threshold="auto", layout="even-r", min_
     #     [approx_diameter_hexagons(int(s)) for s in component_sizes], dtype=float
     # )
 
-    # FFT power spectrum
-    wavelengths, spectrum = radial_power_spectrum(data)
+    # FFT power spectrum + autocorrelation are both undefined for a field with
+    # no real spatial structure (uniform ON or uniform OFF) — without this guard
+    # both return numbers that look like data but are actually just floating-
+    # point noise dressed up as a peak/decay length. See UNIFORM_FIELD_STD_EPS.
+    is_uniform = float(np.std(data)) < UNIFORM_FIELD_STD_EPS
+
     peak_wavelength = np.nan
     peak_width = np.nan
     peak_sharpness = np.nan
-    if len(spectrum) > 0 and np.any(np.isfinite(spectrum)):
-        positive = spectrum[spectrum > 0]
-        peak_sharpness = (
-            float(np.nanmax(spectrum) / np.nanmedian(positive))
-            if len(positive) > 0
+    zero_crossing = np.nan
+    corr_length = np.nan
+
+    if not is_uniform:
+        # FFT power spectrum
+        wavelengths, spectrum = radial_power_spectrum(data)
+        if len(spectrum) > 0 and np.any(np.isfinite(spectrum)):
+            positive = spectrum[spectrum > 0]
+            peak_sharpness = (
+                float(np.nanmax(spectrum) / np.nanmedian(positive))
+                if len(positive) > 0
+                else np.nan
+            )
+            peak_idx_arr, props = find_peaks(spectrum, prominence=0.0)
+            if len(peak_idx_arr) > 0:
+                best = np.argmax(props["prominences"])
+                peak_idx = peak_idx_arr[best]
+                peak_wavelength = float(wavelengths[peak_idx])
+                widths_samples, _, _, _ = peak_widths(spectrum, [peak_idx], rel_height=0.5)
+                local_spacing = abs(wavelengths[peak_idx] - wavelengths[peak_idx - 1]) if peak_idx > 0 else abs(wavelengths[1] - wavelengths[0])
+                peak_width = float(widths_samples[0] * local_spacing)
+            else:
+                peak_wavelength = float(wavelengths[np.argmax(spectrum)])
+
+        # Autocorrelation
+        _, autocorr = analyze_image_autocorrelation(data)
+        corr = autocorr["radial_autocorrelation"].to_numpy()
+        distance = autocorr["bin_centers"].to_numpy()
+
+        zero_idx = np.where(corr <= 0)[0]
+        zero_crossing = (
+            float(distance[zero_idx[0]])
+            if len(zero_idx) > 0
             else np.nan
         )
-        peak_idx_arr, props = find_peaks(spectrum, prominence=0.0)
-        if len(peak_idx_arr) > 0:
-            best = np.argmax(props["prominences"])
-            peak_idx = peak_idx_arr[best]
-            peak_wavelength = float(wavelengths[peak_idx])
-            widths_samples, _, _, _ = peak_widths(spectrum, [peak_idx], rel_height=0.5)
-            local_spacing = abs(wavelengths[peak_idx] - wavelengths[peak_idx - 1]) if peak_idx > 0 else abs(wavelengths[1] - wavelengths[0])
-            peak_width = float(widths_samples[0] * local_spacing)
-        else:
-            peak_wavelength = float(wavelengths[np.argmax(spectrum)])
 
-    # Autocorrelation
-    _, autocorr = analyze_image_autocorrelation(data)
-    corr = autocorr["radial_autocorrelation"].to_numpy()
-    distance = autocorr["bin_centers"].to_numpy()
-
-    zero_idx = np.where(corr <= 0)[0]
-    zero_crossing = (
-        float(distance[zero_idx[0]])
-        if len(zero_idx) > 0
-        else np.nan
-    )
-
-    decay_idx = np.where(corr <= 1 / np.e)[0]
-    corr_length = (
-        float(distance[decay_idx[0]])
-        if len(decay_idx) > 0
-        else np.nan
-    )
+        decay_idx = np.where(corr <= 1 / np.e)[0]
+        corr_length = (
+            float(distance[decay_idx[0]])
+            if len(decay_idx) > 0
+            else np.nan
+        )
 
     # Otsu-dependent component sizing excluded for now — see note above.
     # if len(component_sizes) > 0:
