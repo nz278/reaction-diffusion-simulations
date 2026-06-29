@@ -12,6 +12,7 @@ All functions assume field arrays are shaped as (Ny, Nx).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional, Sequence
 
 import numpy as np
@@ -460,3 +461,96 @@ def plot_four_frames(
     fig.suptitle(f"{title}\nStep {final_step}")
     fig.savefig(outfile_png, dpi=300, bbox_inches="tight")
     plt.close(fig)
+
+
+def compare_final_fields(
+    npz_paths: Sequence[Path],
+    labels: Sequence[str] | None = None,
+    field: str = "A_final",
+    cmap: str = "Greens",
+    hex_radius: float = 1.0,
+    outfile_png: Path = Path("field_comparison.png"),
+) -> Path:
+    """
+    Render the chosen field from several .npz files side by side on a
+    shared color scale.
+
+    Parameters
+    ----------
+    npz_paths
+        Paths to the saved .npz files to compare.
+    labels
+        Optional per-panel titles. Defaults to each file's stem.
+    field
+        Which saved array to load from each file.
+    cmap
+        Matplotlib colormap name (default: Greens, matching the rest of the codebase).
+    hex_radius
+        Hex tile radius passed through to _add_hex_field.
+    outfile_png
+        Where to save the comparison figure.
+    """
+    npz_paths = [Path(p) for p in npz_paths]
+    if labels is None:
+        labels = [p.name for p in npz_paths]
+
+    arrays = []
+    for p in npz_paths:
+        data = np.load(p, allow_pickle=True)
+        candidates = [field, "A_final", "activator_final"]
+        for key in candidates:
+            if key in data.files:
+                arrays.append(np.asarray(data[key]))
+                break
+        else:
+            raise KeyError(f"No matching field found in {p}. Keys: {list(data.files)}")
+
+    vmax = max(1e-12, max(float(a.max()) for a in arrays))
+    norm = Normalize(vmin=0.0, vmax=vmax)
+
+    fig, axes = plt.subplots(
+        1, len(arrays), figsize=(4 * len(arrays), 4.2), constrained_layout=True
+    )
+    if len(arrays) == 1:
+        axes = [axes]
+
+    pc = None
+    for ax, data, label in zip(axes, arrays, labels):
+        pc = _add_hex_field(ax, data, cmap=cmap, norm=norm, hex_radius=hex_radius)
+        ax.set_title(label, fontsize=10)
+
+    fig.colorbar(pc, ax=list(axes), fraction=0.025, pad=0.02, label=field)
+
+    outfile_png = Path(outfile_png)
+    fig.savefig(outfile_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {outfile_png.resolve()}")
+    return outfile_png
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Compare A_final fields from multiple .npz files side by side."
+    )
+    parser.add_argument(
+        "npz_files",
+        type=Path,
+        nargs="+",
+        help="Paths to the .npz files to compare",
+    )
+    parser.add_argument(
+        "--field",
+        default="A_final",
+        help="Which saved array to load from each file (default: A_final)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=Path("field_comparison.png"),
+        help="Output image file",
+    )
+    args = parser.parse_args()
+    compare_final_fields(args.npz_files, field=args.field, outfile_png=args.output)
