@@ -91,6 +91,7 @@ def run_one_simulation(params: dict[str, Any]) -> dict[str, Any]:
         save_every=params.get("save_every", 100),
         noise_amplitude=params.get("noise_amplitude", 0.0),
         nucleation_rate=params.get("nucleation_rate", 0.02),
+        n_points=params.get("n_points", 1),
     )
 
     A_hist, R_hist, steps_used, a_ss, i_ss = result
