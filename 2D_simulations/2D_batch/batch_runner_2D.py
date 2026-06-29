@@ -91,7 +91,7 @@ def run_one_simulation(params: dict[str, Any]) -> dict[str, Any]:
         save_every=params.get("save_every", 100),
         noise_amplitude=params.get("noise_amplitude", 0.0),
         nucleation_rate=params.get("nucleation_rate", 0.02),
-        n_points=params.get("n_points", 1),
+        n_points=params.get("n_points", 6),
     )
 
     A_hist, R_hist, steps_used, a_ss, i_ss = result
@@ -117,6 +117,8 @@ def plot_pc_change(
     mean_change: np.ndarray,
     save_every: int,
     filepath: str,
+    title: str = "Termination metric over time",
+    ylabel: str = "|Δ| per saved frame",
 ) -> None:
     time_steps = np.arange(1, len(max_change) + 1) * save_every
 
@@ -125,8 +127,8 @@ def plot_pc_change(
     plt.plot(time_steps, mean_change, label="Mean per-cell change")
     plt.yscale("log")
     plt.xlabel("Simulation step")
-    plt.ylabel("|ΔA| per saved frame")  # Change in activator field
-    plt.title("Termination metric over time")
+    plt.ylabel(ylabel)
+    plt.title(title)
     plt.legend()
     plt.tight_layout()
     plt.savefig(filepath, dpi=200)
@@ -184,22 +186,41 @@ def run_one(
     r_min = R_final.min()
     r_diff = r_max - r_min
 
+    A_hist = np.asarray(r["A_hist"])
+    R_hist = np.asarray(r["R_hist"])
+
+    act_max_change = act_mean_change = None
+    inh_max_change = inh_mean_change = None
+
     # Termination conditions
     if p.get("term_plots_enable", False):
         term_dir = os.path.join(outdir, "termination_plots")
         os.makedirs(term_dir, exist_ok=True)
 
-        A_hist = np.asarray(r["A_hist"])
         dA = np.abs(np.diff(A_hist, axis=0))
-
-        max_change = dA.reshape(dA.shape[0], -1).max(axis=1)
-        mean_change = dA.reshape(dA.shape[0], -1).mean(axis=1)
+        act_max_change = dA.reshape(dA.shape[0], -1).max(axis=1)
+        act_mean_change = dA.reshape(dA.shape[0], -1).mean(axis=1)
 
         plot_pc_change(
-            max_change,
-            mean_change,
+            act_max_change,
+            act_mean_change,
             p.get("save_every", 100),
-            os.path.join(term_dir, f"plot_{run_id:04d}.png"),
+            os.path.join(term_dir, f"act_plot_{run_id:04d}.png"),
+            title="Activator termination metric over time",
+            ylabel="|ΔA| per saved frame",
+        )
+
+        dR = np.abs(np.diff(R_hist, axis=0))
+        inh_max_change = dR.reshape(dR.shape[0], -1).max(axis=1)
+        inh_mean_change = dR.reshape(dR.shape[0], -1).mean(axis=1)
+
+        plot_pc_change(
+            inh_max_change,
+            inh_mean_change,
+            p.get("save_every", 100),
+            os.path.join(term_dir, f"inh_plot_{run_id:04d}.png"),
+            title="Inhibitor termination metric over time",
+            ylabel="|ΔR| per saved frame",
         )
 
         row.update(
@@ -210,10 +231,14 @@ def run_one(
                 "r_max": r_max,
                 "r_min": r_min,
                 "r_diff": r_diff,
-                "max_change_final": max_change[-1],
-                "mean_change_final": mean_change[-1],
-                "max_change_peak": max_change.max(),
-                "mean_change_peak": mean_change.max(),
+                "act_max_change_final": act_max_change[-1],
+                "act_mean_change_final": act_mean_change[-1],
+                "act_max_change_peak": act_max_change.max(),
+                "act_mean_change_peak": act_mean_change.max(),
+                "inh_max_change_final": inh_max_change[-1],
+                "inh_mean_change_final": inh_mean_change[-1],
+                "inh_max_change_peak": inh_max_change.max(),
+                "inh_mean_change_peak": inh_mean_change.max(),
             }
         )
 
@@ -224,12 +249,13 @@ def run_one(
         A_final=np.asarray(A_final),
         R_final=np.asarray(R_final),
         A_hist=A_hist,
-        R_hist=np.asarray(r["R_hist"]),
-        max_change=max_change,
-        mean_change=mean_change,
+        R_hist=R_hist,
+        act_max_change=act_max_change,
+        act_mean_change=act_mean_change,
+        inh_max_change=inh_max_change,
+        inh_mean_change=inh_mean_change,
         save_every=p.get("save_every", 100),
         steps_used=r["steps_used"],
-
     )
 
     return row
