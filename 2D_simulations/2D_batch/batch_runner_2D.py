@@ -189,10 +189,13 @@ def run_one(
     A_hist = np.asarray(r["A_hist"])
     R_hist = np.asarray(r["R_hist"])
 
-    act_max_change = act_mean_change = None
-    inh_max_change = inh_mean_change = None
 
-    # Termination conditions
+    act_max_change = np.array([])
+    act_mean_change = np.array([])
+    inh_max_change = np.array([])
+    inh_mean_change = np.array([])
+
+    
     if p.get("term_plots_enable", False):
         term_dir = os.path.join(outdir, "termination_plots")
         os.makedirs(term_dir, exist_ok=True)
