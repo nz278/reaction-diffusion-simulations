@@ -111,7 +111,7 @@ def run_one_simulation(params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# Plot max and mean per-cell change for analyzing termination conditions
+# Plot max and mean per-cell change for analyzing termination conditions.
 def plot_pc_change(
     max_change: np.ndarray,
     mean_change: np.ndarray,
@@ -164,7 +164,6 @@ def run_one(
         R_initial=r.get("inhibitor_initial"),
     )
 
-    # Additional video logic similar to main_2D
     if p.get("video_enable", False):
         video_dir = os.path.join(outdir, "videos")
         os.makedirs(video_dir, exist_ok=True)
@@ -176,8 +175,23 @@ def run_one(
             title=f"Run {run_id:04d}",
             loop=False,
             savefile=os.path.join(video_dir, f"run_{run_id:04d}.mp4"),
-            fps=60,  # shorter playback, no frame loss
+            fps=60,
         )
+
+        # Zoom into first second(s) of full video
+        if p.get("early_enable", False):
+            early_seconds = p.get("early_seconds", 2.0)
+            early_frames = max(2, int(np.ceil(early_seconds * 60)))
+
+            animate_histories(
+                r["A_hist"][:early_frames],
+                r["R_hist"][:early_frames],
+                p.get("save_every", 100),
+                title=f"Run {run_id:04d} early window",
+                loop=False,
+                savefile=os.path.join(video_dir, f"run_{run_id:04d}_early.mp4"),
+                fps=4,
+            )
 
     a_max = A_final.max()
     a_min = A_final.min()
@@ -192,7 +206,6 @@ def run_one(
     act_max_change = act_mean_change = None
     inh_max_change = inh_mean_change = None
 
-    # Termination conditions
     if p.get("term_plots_enable", False):
         term_dir = os.path.join(outdir, "termination_plots")
         os.makedirs(term_dir, exist_ok=True)
