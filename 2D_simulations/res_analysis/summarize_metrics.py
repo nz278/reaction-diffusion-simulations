@@ -1,19 +1,67 @@
 from pathlib import Path
+import sys
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
 from scipy.signal import find_peaks, peak_prominences
+from matplotlib.colors import Normalize
+
+script_path = Path(__file__).resolve()
+
+# Read parent folder
+sys.path.insert(0, str(script_path.parents[1]))
+
+run_dir = (
+    script_path.parents[1]
+    / "2D_batch"
+    / "runs"
+    / "collect_metrics"
+)
 
 from fft_analysis_2D import load_field, radial_power_spectrum
 from radial_autocor_npz import analyze_image_autocorrelation
+from npz_feature_distribution import otsu_threshold, component_mask
+from visualize_2D import _add_hex_field
 
 
-script_path = Path(__file__).resolve()
-run_dir = script_path.parents[1] / "2D_batch" / "runs" / "collect_metrics"
+#
+def threshold_data(
+    data,
+    threshold="auto",
+    layout="even-r",
+    min_size=2,
+):
+    if threshold == "auto":
+        threshold_used = otsu_threshold(data)  # Existing function (change?)
+    else:
+        threshold_used = float(threshold)  # Fixed threshold
+
+    finite = np.isfinite(data)
+    raw_mask = finite & (data > threshold_used)
+
+    components = component_mask(raw_mask, layout)
+    components = [
+        component
+        for component in components
+        if len(component) >= min_size
+    ]
+
+    # Removes small components
+    filtered_mask = np.zeros_like(raw_mask, dtype=bool)
+
+    for component in components:
+        rows, cols = zip(*component)
+        filtered_mask[rows, cols] = True
+
+    return threshold_used, raw_mask, filtered_mask, components
 
 
-def base_summarize(npz, field="A_final"):
+def base_metrics(
+    npz,
+    field="A_final",
+):
     data, field_name = load_field(npz, field)
 
     # Radially averaged FFT
@@ -31,7 +79,9 @@ def base_summarize(npz, field="A_final"):
         peaks, _ = find_peaks(ps)
         if len(peaks) > 0:
             main_peak = peaks[np.argmax(ps[peaks])]
-            peak_fft_prominence = float(peak_prominences(ps, [main_peak])[0][0])
+            peak_fft_prominence = float(
+                peak_prominences(ps, [main_peak])[0][0]
+            )
         else:
             peak_fft_prominence = np.nan
     else:
@@ -67,6 +117,170 @@ def base_summarize(npz, field="A_final"):
         "autocorr_zero_crossing": autocorr_zero_crossing,
         "autocorr_length_1e": autocorr_length_1e,
     }
+
+# Separated base/threshold metrics
+# Metrics based on activator/inhibitor threshold
+def threshold_metrics(
+    npz,
+    field="A_final",
+    threshold="auto",
+    layout="even-r",
+    min_size=2,
+):
+    data, field_name = load_field(npz, field)
+
+    threshold_used, raw_mask, filtered_mask, components = threshold_data(
+        data,
+        threshold=threshold,
+        layout=layout,
+        min_size=min_size,
+    )
+
+    finite = np.isfinite(data)
+
+    activated_fraction = (
+        float(np.sum(raw_mask) / np.sum(finite))
+        if np.any(finite)
+        else np.nan
+    )
+
+    filtered_activated_fraction = (
+        float(np.sum(filtered_mask) / np.sum(finite))
+        if np.any(finite)
+        else np.nan
+    )
+
+    component_sizes = np.asarray(
+        [len(component) for component in components],
+        dtype=float,
+    )
+
+    n_components = len(components)
+    mean_component_size = (
+        float(np.mean(component_sizes))
+        if component_sizes.size > 0
+        else 0.0
+    )
+
+    return {
+        "file": npz.name,
+        "field": field_name,
+        "threshold": threshold_used,
+        "activated_fraction": activated_fraction,
+        "filtered_activated_fraction": filtered_activated_fraction,
+        "n_components": n_components,
+        "mean_component_size": mean_component_size,
+    }
+
+
+def plot_binary_mask(
+    npz,
+    run_dir,
+    field="A_final",
+    threshold="auto",
+    layout="even-r",
+    min_size=2,
+):
+    data, field_name = load_field(npz, field)
+
+    threshold_used, raw_mask, filtered_mask, components = threshold_data(
+        data,
+        threshold=threshold,
+        layout=layout,
+        min_size=min_size,
+    )
+
+    data_max = (
+        max(1e-12, float(np.nanmax(data)))
+        if np.any(np.isfinite(data))
+        else 1.0
+    )
+
+    data_norm = Normalize(vmin=0.0, vmax=data_max)
+    mask_norm = Normalize(vmin=0.0, vmax=1.0)
+
+    fig, axes = plt.subplots(
+        1,
+        3,
+        figsize=(18, 5),
+        constrained_layout=True,
+        squeeze=False,
+    )
+
+    data_plot = _add_hex_field(
+        axes[0, 0],
+        data,
+        cmap="Greens",
+        norm=data_norm,
+    )
+    axes[0, 0].set_title(field_name)
+    axes[0, 0].set_xlabel("x")
+    axes[0, 0].set_ylabel("y")
+
+    raw_plot = _add_hex_field(
+        axes[0, 1],
+        raw_mask.astype(float),
+        cmap="gray",
+        norm=mask_norm,
+    )
+    axes[0, 1].set_title(
+        f"Threshold mask\nthreshold = {threshold_used:.4g}"
+    )
+    axes[0, 1].set_xlabel("x")
+    axes[0, 1].set_ylabel("y")
+
+    filtered_plot = _add_hex_field(
+        axes[0, 2],
+        filtered_mask.astype(float),
+        cmap="gray",
+        norm=mask_norm,
+    )
+    axes[0, 2].set_title(
+        f"Filtered mask\n"
+        f"min size = {min_size}, components = {len(components)}"
+    )
+    axes[0, 2].set_xlabel("x")
+    axes[0, 2].set_ylabel("y")
+
+    fig.colorbar(
+        data_plot,
+        ax=axes[0, 0],
+        fraction=0.046,
+        pad=0.04,
+        label="Activator",
+    )
+    fig.colorbar(
+        raw_plot,
+        ax=axes[0, 1],
+        fraction=0.046,
+        pad=0.04,
+        label="Active",
+        ticks=[0, 1],
+    )
+    fig.colorbar(
+        filtered_plot,
+        ax=axes[0, 2],
+        fraction=0.046,
+        pad=0.04,
+        label="Active",
+        ticks=[0, 1],
+    )
+
+    threshold_label = (
+        "auto"
+        if threshold == "auto"
+        else f"{float(threshold):g}".replace(".", "p")
+    )
+
+    save_path = (
+        run_dir
+        / f"binary_{npz.stem}_mask.png"
+    )
+
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    return save_path
 
 
 def plot_metrics(summary, run_dir):
@@ -140,6 +354,7 @@ def plot_metrics(summary, run_dir):
 
     return save_path
 
+
 def one_png(run_dir):
     png_files = sorted(run_dir.glob("*.png"))
     png_files = [
@@ -173,17 +388,56 @@ def one_png(run_dir):
 
     return save_path
 
+
 def main():
-    results = [base_summarize(p) for p in sorted(run_dir.glob("*.npz"))]
-    summary = pd.DataFrame(results)
+    threshold = "auto"
+    layout = "even-r"
+    min_size = 2
 
-    save_path = run_dir / "base_metrics_summary.csv"
-    summary.to_csv(save_path, index=False)
+    npz_files = sorted(run_dir.glob("*.npz"))
 
-    print(summary.to_string(index=False))
-    print(f"\nSaved: {save_path}")
+    base_results = [
+        base_metrics(p)
+        for p in npz_files
+    ]
+    base_summary = pd.DataFrame(base_results)
 
-    plot_path = plot_metrics(summary, run_dir)
+    base_save_path = run_dir / "metrics_base_summary.csv"  # Could honestly consolidate into one .csv?
+    base_summary.to_csv(base_save_path, index=False)
+
+    print("Base metrics:")
+    print(base_summary.to_string(index=False))
+    print(f"\nSaved: {base_save_path}")
+
+    threshold_results = [
+        threshold_metrics(
+            p,
+            threshold=threshold,
+            layout=layout,
+            min_size=min_size,
+        )
+        for p in npz_files
+    ]
+    threshold_summary = pd.DataFrame(threshold_results)
+
+    threshold_save_path = run_dir / "metrics_threshold_summary.csv"
+    threshold_summary.to_csv(threshold_save_path, index=False)
+
+    print("\nThreshold metrics:")
+    print(threshold_summary.to_string(index=False))
+    print(f"\nSaved: {threshold_save_path}")
+
+    for npz in npz_files:
+        mask_path = plot_binary_mask(
+            npz,
+            run_dir,
+            threshold=threshold,
+            layout=layout,
+            min_size=min_size,
+        )
+        print(f"Saved: {mask_path}")
+
+    plot_path = plot_metrics(base_summary, run_dir)
     if plot_path is not None:
         print(f"Saved: {plot_path}")
 
