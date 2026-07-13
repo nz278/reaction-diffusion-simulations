@@ -1,3 +1,4 @@
+outdir: runs/temporal_analysis
 outdir: runs/collect_metrics
 
 base:
@@ -6,6 +7,15 @@ base:
   steps: 50000
   dt: 0.01
   dx: 1.0
+  save_every: 200
+  stopping_threshold: 0.0
+  min_steps: 50000  # Avoid early stopping
+
+  init_mode: activator_random_spikes
+  activator_type: juxtacrine
+  nucleation_rate: 0.001
+  noise_amplitude: 0.0
+  n_points: 10
   save_every: 100
   stopping_threshold: 0.0
   min_steps: 10000  # Avoid early stopping
@@ -23,12 +33,20 @@ base:
   inh_hill_coeff: 3
 
   act_prod_rate: 5.0
+  inh_prod_rate: 12.0
+  inh_decay_rate: 0.5
   # inh_prod_rate: 25
   inh_decay_rate: 0.5
   act_decay_rate: 1.0
 
   # act_diffusion: 1.0
   inh_diffusion: 10.0
+  act_diffusion: 1.0
+
+  # Additional video and termination plots toggle for batch_runner
+  # Turn off to save time if doing large batches
+  video_enable: true
+  term_plots_enable: true
 
   # Additional video and termination plots toggle for batch_runner
   # Turn off to save time if doing large batches
@@ -41,4 +59,5 @@ base:
 
 mode: grid
 sweeps:
+  set_peak_height: [5, 10, 15, 20]
     inh_prod_rate:  [12, 12.2, 12.4, 12.6]

@@ -45,8 +45,8 @@ def otsu_threshold(values: np.ndarray, bins: int = 256) -> float:
     if x.size == 0:
         raise ValueError("No finite values found for Otsu thresholding.")
 
-    if np.allclose(x.min(), x.max()):
-        return float(x.min())
+    if np.allclose(x.min(), x.max()) or (np.ptp(x) < 1e-4):
+        return float(x.max()) + 1.0
 
     hist, bin_edges = np.histogram(x, bins=bins)
     hist = hist.astype(float)
@@ -222,6 +222,10 @@ def process_file(
 
     if threshold == "auto":
         thr = otsu_threshold(arr)
+    elif "fraction" in str(threshold):
+        
+        fraction_value = float(str(threshold).split("_")[-1])
+        thr = np.max(arr) * fraction_value
     else:
         thr = float(threshold)
 

@@ -111,6 +111,7 @@ def run_one_simulation(params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Plot max and mean per-cell change for analyzing termination conditions
 # Plot max and mean per-cell change for analyzing termination conditions.
 def plot_pc_change(
     max_change: np.ndarray,
@@ -164,6 +165,7 @@ def run_one(
         R_initial=r.get("inhibitor_initial"),
     )
 
+    # Additional video logic similar to main_2D
     if p.get("video_enable", False):
         video_dir = os.path.join(outdir, "videos")
         os.makedirs(video_dir, exist_ok=True)
@@ -175,8 +177,10 @@ def run_one(
             title=f"Run {run_id:04d}",
             loop=False,
             savefile=os.path.join(video_dir, f"run_{run_id:04d}.mp4"),
-            fps=60,
+            fps=60,  # shorter playback, no frame loss
         )
+
+
 
         # Zoom into first second(s) of full video
         if p.get("early_enable", False):
@@ -203,6 +207,13 @@ def run_one(
     A_hist = np.asarray(r["A_hist"])
     R_hist = np.asarray(r["R_hist"])
 
+
+    act_max_change = np.array([])
+    act_mean_change = np.array([])
+    inh_max_change = np.array([])
+    inh_mean_change = np.array([])
+
+    
     act_max_change = act_mean_change = None
     inh_max_change = inh_mean_change = None
 
