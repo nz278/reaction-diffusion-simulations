@@ -64,49 +64,80 @@ def base_metrics(
 ):
     data, field_name = load_field(npz, field)
 
-    # Radially averaged FFT
-    wavelengths, spectrum = radial_power_spectrum(data)
-    valid = np.isfinite(wavelengths) & np.isfinite(spectrum) & (spectrum > 0)
+    finite = np.isfinite(data)
+    finite_data = data[finite]
 
-    if valid.sum() > 3:
-        wl = wavelengths[valid]
-        ps = spectrum[valid]
+    is_uniform = (
+        finite_data.size == 0
+        or np.allclose(
+            finite_data,
+            finite_data[0],
+            rtol=1e-10,
+            atol=1e-12,
+        )
+    )
 
-        peak_idx = int(np.argmax(ps))
-        peak_fft_wavelength = float(wl[peak_idx])
-        peak_fft_sharpness = float(np.nanmax(ps) / np.nanmedian(ps))
-
-        peaks, _ = find_peaks(ps)
-        if len(peaks) > 0:
-            main_peak = peaks[np.argmax(ps[peaks])]
-            peak_fft_prominence = float(
-                peak_prominences(ps, [main_peak])[0][0]
-            )
-        else:
-            peak_fft_prominence = np.nan
-    else:
+    if is_uniform:
         peak_fft_wavelength = np.nan
         peak_fft_sharpness = np.nan
         peak_fft_prominence = np.nan
+        autocorr_zero_crossing = np.nan
+        autocorr_length_1e = np.nan
 
-    # Radial autocorrelation
-    _, autocorr = analyze_image_autocorrelation(data)
-    corr = autocorr["radial_autocorrelation"].to_numpy()
-    distance = autocorr["bin_centers"].to_numpy()
+    else:
+        # Radially averaged FFT
+        wavelengths, spectrum = radial_power_spectrum(data)
+        valid = np.isfinite(wavelengths) & np.isfinite(spectrum) & (spectrum > 0)
 
-    zero_idx = np.where(corr <= 0)[0]
-    autocorr_zero_crossing = (
-        float(distance[zero_idx[0]])
-        if len(zero_idx) > 0
-        else np.nan
-    )
+        if valid.sum() > 3:
+            wl = wavelengths[valid]
+            ps = spectrum[valid]
 
-    decay_idx = np.where(corr <= 1 / np.e)[0]
-    autocorr_length_1e = (
-        float(distance[decay_idx[0]])
-        if len(decay_idx) > 0
-        else np.nan
-    )
+            peak_idx = int(np.argmax(ps))
+            peak_fft_wavelength = float(wl[peak_idx])
+
+            median_power = np.nanmedian(ps)
+            peak_fft_sharpness = (
+                float(np.nanmax(ps) / median_power)
+                if median_power > 0
+                else np.nan
+            )
+
+            peaks, _ = find_peaks(ps)
+            if len(peaks) > 0:
+                main_peak = peaks[np.argmax(ps[peaks])]
+                peak_fft_prominence = float(
+                    peak_prominences(ps, [main_peak])[0][0]
+                )
+            else:
+                peak_fft_prominence = np.nan
+        else:
+            peak_fft_wavelength = np.nan
+            peak_fft_sharpness = np.nan
+            peak_fft_prominence = np.nan
+
+        # Radial autocorrelation
+        _, autocorr = analyze_image_autocorrelation(data)
+        corr = autocorr["radial_autocorrelation"].to_numpy()
+        distance = autocorr["bin_centers"].to_numpy()
+
+        valid_corr = np.isfinite(corr) & np.isfinite(distance)
+        corr = corr[valid_corr]
+        distance = distance[valid_corr]
+
+        zero_idx = np.where(corr <= 0)[0]
+        autocorr_zero_crossing = (
+            float(distance[zero_idx[0]])
+            if len(zero_idx) > 0
+            else np.nan
+        )
+
+        decay_idx = np.where(corr <= 1 / np.e)[0]
+        autocorr_length_1e = (
+            float(distance[decay_idx[0]])
+            if len(decay_idx) > 0
+            else np.nan
+        )
 
     return {
         "file": npz.name,
@@ -180,15 +211,9 @@ def plot_binary_mask(
     threshold="auto",
     layout="even-r",
     min_size=2,
+    threshold_values=None,
 ):
     data, field_name = load_field(npz, field)
-
-    threshold_used, raw_mask, filtered_mask, components = threshold_data(
-        data,
-        threshold=threshold,
-        layout=layout,
-        min_size=min_size,
-    )
 
     data_max = (
         max(1e-12, float(np.nanmax(data)))
@@ -199,78 +224,174 @@ def plot_binary_mask(
     data_norm = Normalize(vmin=0.0, vmax=data_max)
     mask_norm = Normalize(vmin=0.0, vmax=1.0)
 
-    fig, axes = plt.subplots(
-        1,
-        3,
-        figsize=(18, 5),
-        constrained_layout=True,
-        squeeze=False,
-    )
+    if threshold == "fixed":
+        thresholds = [
+            float(threshold_value)
+            for threshold_value in threshold_values
+        ]
 
-    data_plot = _add_hex_field(
-        axes[0, 0],
-        data,
-        cmap="Greens",
-        norm=data_norm,
-    )
-    axes[0, 0].set_title(field_name)
-    axes[0, 0].set_xlabel("x")
-    axes[0, 0].set_ylabel("y")
+        fig = plt.figure(
+            figsize=(4 * len(thresholds), 12),
+            constrained_layout=True,
+        )
 
-    raw_plot = _add_hex_field(
-        axes[0, 1],
-        raw_mask.astype(float),
-        cmap="gray",
-        norm=mask_norm,
-    )
-    axes[0, 1].set_title(
-        f"Threshold mask\nthreshold = {threshold_used:.4g}"
-    )
-    axes[0, 1].set_xlabel("x")
-    axes[0, 1].set_ylabel("y")
+        grid = fig.add_gridspec(
+            3,
+            len(thresholds),
+            height_ratios=(1.25, 1.0, 1.0),
+        )
 
-    filtered_plot = _add_hex_field(
-        axes[0, 2],
-        filtered_mask.astype(float),
-        cmap="gray",
-        norm=mask_norm,
-    )
-    axes[0, 2].set_title(
-        f"Filtered mask\n"
-        f"min size = {min_size}, components = {len(components)}"
-    )
-    axes[0, 2].set_xlabel("x")
-    axes[0, 2].set_ylabel("y")
+        original_ax = fig.add_subplot(grid[0, :])
 
-    fig.colorbar(
-        data_plot,
-        ax=axes[0, 0],
-        fraction=0.046,
-        pad=0.04,
-        label="Activator",
-    )
-    fig.colorbar(
-        raw_plot,
-        ax=axes[0, 1],
-        fraction=0.046,
-        pad=0.04,
-        label="Active",
-        ticks=[0, 1],
-    )
-    fig.colorbar(
-        filtered_plot,
-        ax=axes[0, 2],
-        fraction=0.046,
-        pad=0.04,
-        label="Active",
-        ticks=[0, 1],
-    )
+        data_plot = _add_hex_field(
+            original_ax,
+            data,
+            cmap="Greens",
+            norm=data_norm,
+        )
+        original_ax.set_title(field_name)
+        original_ax.set_xlabel("x")
+        original_ax.set_ylabel("y")
 
-    threshold_label = (
-        "auto"
-        if threshold == "auto"
-        else f"{float(threshold):g}".replace(".", "p")
-    )
+        fig.colorbar(
+            data_plot,
+            ax=original_ax,
+            fraction=0.025,
+            pad=0.02,
+            label="Activator",
+        )
+
+        mask_axes = []
+
+        for col, threshold_value in enumerate(thresholds):
+            threshold_used, raw_mask, filtered_mask, components = threshold_data(
+                data,
+                threshold=threshold_value,
+                layout=layout,
+                min_size=min_size,
+            )
+
+            raw_ax = fig.add_subplot(grid[1, col])
+            filtered_ax = fig.add_subplot(grid[2, col])
+
+            mask_axes.extend([raw_ax, filtered_ax])
+
+            _add_hex_field(
+                raw_ax,
+                raw_mask.astype(float),
+                cmap="gray",
+                norm=mask_norm,
+            )
+
+            _add_hex_field(
+                filtered_ax,
+                filtered_mask.astype(float),
+                cmap="gray",
+                norm=mask_norm,
+            )
+
+            raw_ax.set_title(
+                f"Threshold mask\nthreshold = {threshold_used:.4g}"
+            )
+            raw_ax.set_xlabel("x")
+            raw_ax.set_ylabel("y")
+
+            filtered_ax.set_title(
+                f"Filtered mask\n"
+                f"min size = {min_size}, components = {len(components)}"
+            )
+            filtered_ax.set_xlabel("x")
+            filtered_ax.set_ylabel("y")
+
+        mask_plot = plt.cm.ScalarMappable(
+            norm=mask_norm,
+            cmap="gray",
+        )
+        mask_plot.set_array([])
+
+        fig.colorbar(
+            mask_plot,
+            ax=mask_axes,
+            fraction=0.015,
+            pad=0.02,
+            label="Active",
+            ticks=[0, 1],
+        )
+
+    else:
+        threshold_used, raw_mask, filtered_mask, components = threshold_data(
+            data,
+            threshold=threshold,
+            layout=layout,
+            min_size=min_size,
+        )
+
+        fig, axes = plt.subplots(
+            1,
+            3,
+            figsize=(18, 5),
+            constrained_layout=True,
+            squeeze=False,
+        )
+
+        data_plot = _add_hex_field(
+            axes[0, 0],
+            data,
+            cmap="Greens",
+            norm=data_norm,
+        )
+        axes[0, 0].set_title(field_name)
+        axes[0, 0].set_xlabel("x")
+        axes[0, 0].set_ylabel("y")
+
+        raw_plot = _add_hex_field(
+            axes[0, 1],
+            raw_mask.astype(float),
+            cmap="gray",
+            norm=mask_norm,
+        )
+        axes[0, 1].set_title(
+            f"Threshold mask\nthreshold = {threshold_used:.4g}"
+        )
+        axes[0, 1].set_xlabel("x")
+        axes[0, 1].set_ylabel("y")
+
+        filtered_plot = _add_hex_field(
+            axes[0, 2],
+            filtered_mask.astype(float),
+            cmap="gray",
+            norm=mask_norm,
+        )
+        axes[0, 2].set_title(
+            f"Filtered mask\n"
+            f"min size = {min_size}, components = {len(components)}"
+        )
+        axes[0, 2].set_xlabel("x")
+        axes[0, 2].set_ylabel("y")
+
+        fig.colorbar(
+            data_plot,
+            ax=axes[0, 0],
+            fraction=0.046,
+            pad=0.04,
+            label="Activator",
+        )
+        fig.colorbar(
+            raw_plot,
+            ax=axes[0, 1],
+            fraction=0.046,
+            pad=0.04,
+            label="Active",
+            ticks=[0, 1],
+        )
+        fig.colorbar(
+            filtered_plot,
+            ax=axes[0, 2],
+            fraction=0.046,
+            pad=0.04,
+            label="Active",
+            ticks=[0, 1],
+        )
 
     save_path = (
         run_dir
@@ -299,6 +420,34 @@ def plot_metrics(summary, run_dir):
     for npz in sorted(run_dir.glob("*.npz")):
         data, field_name = load_field(npz, "A_final")
 
+        finite = np.isfinite(data)
+        finite_data = data[finite]
+
+        is_uniform = (
+            finite_data.size == 0
+            or np.allclose(
+                finite_data,
+                finite_data[0],
+                rtol=1e-10,
+                atol=1e-12,
+            )
+        )
+
+        if is_uniform:
+            axes[0, 0].plot(
+                [],
+                [],
+                linewidth=1.4,
+                label=f"{npz.stem} (uniform field)",
+            )
+            axes[1, 0].plot(
+                [],
+                [],
+                linewidth=1.4,
+                label=f"{npz.stem} (uniform field)",
+            )
+            continue
+
         # Radially averaged FFT
         wavelengths, spectrum = radial_power_spectrum(data)
         valid = np.isfinite(wavelengths) & np.isfinite(spectrum) & (spectrum > 0)
@@ -306,14 +455,25 @@ def plot_metrics(summary, run_dir):
         if valid.sum() > 3:
             wl = wavelengths[valid]
             ps = spectrum[valid]
-            ps = ps / np.nanmax(ps)
 
-            axes[0, 0].plot(
-                wl,
-                ps,
-                linewidth=1.4,
-                label=npz.stem,
-            )
+            max_power = np.nanmax(ps)
+
+            if max_power > 0:
+                ps = ps / max_power
+
+                axes[0, 0].plot(
+                    wl,
+                    ps,
+                    linewidth=1.4,
+                    label=npz.stem,
+                )
+            else:
+                axes[0, 0].plot(
+                    [],
+                    [],
+                    linewidth=1.4,
+                    label=f"{npz.stem} (no spatial power)",
+                )
         else:
             axes[0, 0].plot(
                 [],
@@ -327,12 +487,22 @@ def plot_metrics(summary, run_dir):
         corr = autocorr["radial_autocorrelation"].to_numpy()
         distance = autocorr["bin_centers"].to_numpy()
 
-        axes[1, 0].plot(
-            distance,
-            corr,
-            linewidth=1.4,
-            label=npz.stem,
-        )
+        valid_corr = np.isfinite(corr) & np.isfinite(distance)
+
+        if np.any(valid_corr):
+            axes[1, 0].plot(
+                distance[valid_corr],
+                corr[valid_corr],
+                linewidth=1.4,
+                label=npz.stem,
+            )
+        else:
+            axes[1, 0].plot(
+                [],
+                [],
+                linewidth=1.4,
+                label=f"{npz.stem} (undefined autocorr.)",
+            )
 
     axes[0, 0].set_title("Fourier power spectrum")
     axes[0, 0].set_xlabel("Wavelength (cells)")
@@ -390,9 +560,20 @@ def one_png(run_dir):
 
 
 def main():
-    threshold = "auto"
+    threshold = "fixed"
     layout = "even-r"
     min_size = 2
+
+    threshold_values = (0.2, 0.6, 1.0, 1.4, 1.8)
+
+    if threshold == "auto":
+        metric_thresholds = ("auto",)
+    elif threshold == "fixed":
+        metric_thresholds = threshold_values
+    else:
+        raise ValueError(
+            'threshold must be either "auto" or "fixed"'
+        )
 
     npz_files = sorted(run_dir.glob("*.npz"))
 
@@ -412,11 +593,12 @@ def main():
     threshold_results = [
         threshold_metrics(
             p,
-            threshold=threshold,
+            threshold=threshold_value,
             layout=layout,
             min_size=min_size,
         )
         for p in npz_files
+        for threshold_value in metric_thresholds
     ]
     threshold_summary = pd.DataFrame(threshold_results)
 
@@ -434,6 +616,7 @@ def main():
             threshold=threshold,
             layout=layout,
             min_size=min_size,
+            threshold_values=threshold_values,
         )
         print(f"Saved: {mask_path}")
 
