@@ -22,7 +22,7 @@ run_dir = (
 
 from fft_analysis_2D import load_field, radial_power_spectrum
 from radial_autocor_npz import analyze_image_autocorrelation
-from npz_feature_distribution import otsu_threshold, component_mask
+from npz_feature_distribution import otsu_threshold, component_mask, nn_distances
 from visualize_2D import _add_hex_field
 
 
@@ -58,9 +58,12 @@ def threshold_data(
     return threshold_used, raw_mask, filtered_mask, components
 
 
-def base_metrics(
+def analyze_file(
     npz,
-    field="A_final",
+    field,
+    thresholds,
+    layout,
+    min_size,
 ):
     data, field_name = load_field(npz, field)
 
@@ -78,6 +81,46 @@ def base_metrics(
     )
 
     if is_uniform:
+        wavelengths = np.asarray([], dtype=float)
+        spectrum = np.asarray([], dtype=float)
+        distance = np.asarray([], dtype=float)
+        corr = np.asarray([], dtype=float)
+    else:
+        wavelengths, spectrum = radial_power_spectrum(data)
+
+        _, autocorr = analyze_image_autocorrelation(data)
+        corr = autocorr["radial_autocorrelation"].to_numpy()
+        distance = autocorr["bin_centers"].to_numpy()
+
+    threshold_results = {
+        threshold: threshold_data(
+            data,
+            threshold=threshold,
+            layout=layout,
+            min_size=min_size,
+        )
+        for threshold in thresholds
+    }
+
+    return {
+        "data": data,
+        "field_name": field_name,
+        "is_uniform": is_uniform,
+        "wavelengths": wavelengths,
+        "spectrum": spectrum,
+        "distance": distance,
+        "corr": corr,
+        "threshold_results": threshold_results,
+    }
+
+
+def base_metrics(
+    npz,
+    analysis,
+):
+    field_name = analysis["field_name"]
+
+    if analysis["is_uniform"]:
         peak_fft_wavelength = np.nan
         peak_fft_sharpness = np.nan
         peak_fft_prominence = np.nan
@@ -86,15 +129,14 @@ def base_metrics(
 
     else:
         # Radially averaged FFT
-        wavelengths, spectrum = radial_power_spectrum(data)
+        wavelengths = analysis["wavelengths"]
+        spectrum = analysis["spectrum"]
+
         valid = np.isfinite(wavelengths) & np.isfinite(spectrum) & (spectrum > 0)
 
         if valid.sum() > 3:
             wl = wavelengths[valid]
             ps = spectrum[valid]
-
-            peak_idx = int(np.argmax(ps))
-            peak_fft_wavelength = float(wl[peak_idx])
 
             median_power = np.nanmedian(ps)
             peak_fft_sharpness = (
@@ -106,10 +148,12 @@ def base_metrics(
             peaks, _ = find_peaks(ps)
             if len(peaks) > 0:
                 main_peak = peaks[np.argmax(ps[peaks])]
+                peak_fft_wavelength = float(wl[main_peak])
                 peak_fft_prominence = float(
                     peak_prominences(ps, [main_peak])[0][0]
                 )
             else:
+                peak_fft_wavelength = np.nan
                 peak_fft_prominence = np.nan
         else:
             peak_fft_wavelength = np.nan
@@ -117,9 +161,8 @@ def base_metrics(
             peak_fft_prominence = np.nan
 
         # Radial autocorrelation
-        _, autocorr = analyze_image_autocorrelation(data)
-        corr = autocorr["radial_autocorrelation"].to_numpy()
-        distance = autocorr["bin_centers"].to_numpy()
+        corr = analysis["corr"]
+        distance = analysis["distance"]
 
         valid_corr = np.isfinite(corr) & np.isfinite(distance)
         corr = corr[valid_corr]
@@ -153,21 +196,17 @@ def base_metrics(
 # Metrics based on activator/inhibitor threshold
 def threshold_metrics(
     npz,
-    field="A_final",
-    threshold="auto",
+    analysis,
+    threshold,
     layout="even-r",
-    min_size=2,
 ):
-    data, field_name = load_field(npz, field)
+    field_name = analysis["field_name"]
 
-    threshold_used, raw_mask, filtered_mask, components = threshold_data(
-        data,
-        threshold=threshold,
-        layout=layout,
-        min_size=min_size,
+    threshold_used, raw_mask, filtered_mask, components = (
+        analysis["threshold_results"][threshold]
     )
 
-    finite = np.isfinite(data)
+    finite = np.isfinite(analysis["data"])
 
     activated_fraction = (
         float(np.sum(raw_mask) / np.sum(finite))
@@ -187,10 +226,28 @@ def threshold_metrics(
     )
 
     n_components = len(components)
+
     mean_component_size = (
         float(np.mean(component_sizes))
         if component_sizes.size > 0
         else 0.0
+    )
+
+    nn_distance = nn_distances(
+        components,
+        layout=layout,
+    )
+
+    mean_nn_distance = (
+        float(np.mean(nn_distance))
+        if nn_distance.size > 0
+        else np.nan
+    )
+
+    std_nn_distance = (
+        float(np.std(nn_distance))
+        if nn_distance.size > 0
+        else np.nan
     )
 
     return {
@@ -201,19 +258,21 @@ def threshold_metrics(
         "filtered_activated_fraction": filtered_activated_fraction,
         "n_components": n_components,
         "mean_component_size": mean_component_size,
+        "mean_nn_distance": mean_nn_distance,
+        "std_nn_distance": std_nn_distance,
     }
 
 
 def plot_binary_mask(
     npz,
     run_dir,
-    field="A_final",
+    analysis,
     threshold="auto",
-    layout="even-r",
     min_size=2,
     threshold_values=None,
 ):
-    data, field_name = load_field(npz, field)
+    data = analysis["data"]
+    field_name = analysis["field_name"]
 
     data_max = (
         max(1e-12, float(np.nanmax(data)))
@@ -264,11 +323,8 @@ def plot_binary_mask(
         mask_axes = []
 
         for col, threshold_value in enumerate(thresholds):
-            threshold_used, raw_mask, filtered_mask, components = threshold_data(
-                data,
-                threshold=threshold_value,
-                layout=layout,
-                min_size=min_size,
+            threshold_used, raw_mask, filtered_mask, components = (
+                analysis["threshold_results"][threshold_value]
             )
 
             raw_ax = fig.add_subplot(grid[1, col])
@@ -319,11 +375,8 @@ def plot_binary_mask(
         )
 
     else:
-        threshold_used, raw_mask, filtered_mask, components = threshold_data(
-            data,
-            threshold=threshold,
-            layout=layout,
-            min_size=min_size,
+        threshold_used, raw_mask, filtered_mask, components = (
+            analysis["threshold_results"][threshold]
         )
 
         fig, axes = plt.subplots(
@@ -404,7 +457,7 @@ def plot_binary_mask(
     return save_path
 
 
-def plot_metrics(summary, run_dir):
+def plot_metrics(summary, analyses, run_dir):
     if summary.empty:
         print("Skipping plot: no .npz files found.")
         return None
@@ -417,23 +470,8 @@ def plot_metrics(summary, run_dir):
         squeeze=False,
     )
 
-    for npz in sorted(run_dir.glob("*.npz")):
-        data, field_name = load_field(npz, "A_final")
-
-        finite = np.isfinite(data)
-        finite_data = data[finite]
-
-        is_uniform = (
-            finite_data.size == 0
-            or np.allclose(
-                finite_data,
-                finite_data[0],
-                rtol=1e-10,
-                atol=1e-12,
-            )
-        )
-
-        if is_uniform:
+    for npz, analysis in analyses.items():
+        if analysis["is_uniform"]:
             axes[0, 0].plot(
                 [],
                 [],
@@ -449,7 +487,9 @@ def plot_metrics(summary, run_dir):
             continue
 
         # Radially averaged FFT
-        wavelengths, spectrum = radial_power_spectrum(data)
+        wavelengths = analysis["wavelengths"]
+        spectrum = analysis["spectrum"]
+
         valid = np.isfinite(wavelengths) & np.isfinite(spectrum) & (spectrum > 0)
 
         if valid.sum() > 3:
@@ -483,9 +523,8 @@ def plot_metrics(summary, run_dir):
             )
 
         # Autocorrelation
-        _, autocorr = analyze_image_autocorrelation(data)
-        corr = autocorr["radial_autocorrelation"].to_numpy()
-        distance = autocorr["bin_centers"].to_numpy()
+        corr = analysis["corr"]
+        distance = analysis["distance"]
 
         valid_corr = np.isfinite(corr) & np.isfinite(distance)
 
@@ -577,9 +616,20 @@ def main():
 
     npz_files = sorted(run_dir.glob("*.npz"))
 
+    analyses = {
+        npz: analyze_file(
+            npz,
+            field="A_final",
+            thresholds=metric_thresholds,
+            layout=layout,
+            min_size=min_size,
+        )
+        for npz in npz_files
+    }
+
     base_results = [
-        base_metrics(p)
-        for p in npz_files
+        base_metrics(npz, analyses[npz])
+        for npz in npz_files
     ]
     base_summary = pd.DataFrame(base_results)
 
@@ -592,12 +642,12 @@ def main():
 
     threshold_results = [
         threshold_metrics(
-            p,
+            npz,
+            analyses[npz],
             threshold=threshold_value,
             layout=layout,
-            min_size=min_size,
         )
-        for p in npz_files
+        for npz in npz_files
         for threshold_value in metric_thresholds
     ]
     threshold_summary = pd.DataFrame(threshold_results)
@@ -613,14 +663,14 @@ def main():
         mask_path = plot_binary_mask(
             npz,
             run_dir,
+            analyses[npz],
             threshold=threshold,
-            layout=layout,
             min_size=min_size,
             threshold_values=threshold_values,
         )
         print(f"Saved: {mask_path}")
 
-    plot_path = plot_metrics(base_summary, run_dir)
+    plot_path = plot_metrics(base_summary, analyses, run_dir)
     if plot_path is not None:
         print(f"Saved: {plot_path}")
 

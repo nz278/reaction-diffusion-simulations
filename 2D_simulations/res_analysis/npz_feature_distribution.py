@@ -14,7 +14,6 @@ Outputs per component:
 - approx_diameter_hexagons
 - row_min, row_max, col_min, col_max
 - bbox_height_hexes, bbox_width_hexes
-- centroid_row, centroid_col
 
 Default layout:
 - even-r (row-offset, horizontal hex layout)
@@ -188,6 +187,59 @@ def component_mask(mask: np.ndarray, layout: str) -> List[List[Tuple[int, int]]]
     return components
 
 
+def nn_distances(
+    components,
+    layout="even-r",
+):
+    if len(components) < 2:
+        return np.asarray([], dtype=float)
+
+    centroids = []
+
+    for component in components:
+        rows = np.asarray(
+            [row for row, _ in component],
+            dtype=float,
+        )
+        cols = np.asarray(
+            [col for _, col in component],
+            dtype=float,
+        )
+
+        if layout == "even-r":
+            x = cols + 0.5 * ((rows % 2) == 0)
+            y = rows * np.sqrt(3) / 2
+        elif layout == "odd-r":
+            x = cols + 0.5 * ((rows % 2) == 1)
+            y = rows * np.sqrt(3) / 2
+        elif layout == "even-q":
+            x = cols * np.sqrt(3) / 2
+            y = rows + 0.5 * ((cols % 2) == 0)
+        elif layout == "odd-q":
+            x = cols * np.sqrt(3) / 2
+            y = rows + 0.5 * ((cols % 2) == 1)
+        else:
+            raise ValueError(f"Unknown layout: {layout}")
+
+        centroids.append(
+            [np.mean(x), np.mean(y)]
+        )
+
+    centroids = np.asarray(centroids)
+
+    differences = (
+        centroids[:, None, :]
+        - centroids[None, :, :]
+    )
+    distances = np.sqrt(
+        np.sum(differences ** 2, axis=2)
+    )
+
+    np.fill_diagonal(distances, np.inf)
+
+    return np.min(distances, axis=1)
+
+
 def approx_diameter_hexagons(size_hexes: int) -> float:
     """
     Area-equivalent diameter expressed in hexagon units.
@@ -246,8 +298,6 @@ def process_file(
                 "col_max": int(cc.max()),
                 "bbox_height_hexes": int(rr.max() - rr.min() + 1),
                 "bbox_width_hexes": int(cc.max() - cc.min() + 1),
-                "centroid_row": float(rr.mean()),
-                "centroid_col": float(cc.mean()),
             }
         )
 
@@ -272,8 +322,6 @@ def process_file(
                     "col_max",
                     "bbox_height_hexes",
                     "bbox_width_hexes",
-                    "centroid_row",
-                    "centroid_col",
                 ]
             )
 
