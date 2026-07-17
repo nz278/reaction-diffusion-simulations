@@ -7,8 +7,8 @@ base:
   dt: 0.01
   dx: 1.0
   save_every: 100
-  stopping_threshold: 0.0
-  min_steps: 10000  # Avoid early stopping
+  stopping_threshold: 1.0e-3
+  min_steps: 10000
 
   init_mode: random_uniform_over0
   activator_type: juxtacrine
@@ -41,4 +41,4 @@ base:
 
 mode: grid
 sweeps:
-    inh_prod_rate:  [12, 12.2, 12.4, 12.6]
+    inh_prod_rate:  [8, 9, 10, 11, 12, 13]

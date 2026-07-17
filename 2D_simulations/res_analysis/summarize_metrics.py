@@ -599,7 +599,7 @@ def one_png(run_dir):
 
 
 def main():
-    threshold = "fixed"
+    threshold = "auto"
     layout = "even-r"
     min_size = 2
 
